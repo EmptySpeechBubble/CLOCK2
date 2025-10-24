@@ -6848,11 +6848,23 @@ if ((isRaining || timeOfDay >= 1) && Math.random() < 0.4) { // 40% chance to see
                             // Transition to another state
                             const r = Math.random();
 
+                            // NEW: Direct transition to hopping if already on ground
+                            const groundY = canvas.height * GROUND_HEIGHT_RATIO;
+                            if (Math.abs(this.y - groundY) < 50 && Math.random() < 0.3) { // 30% chance if near ground
+                                this.y = groundY + 40; // Position on ground
+                                this.velocity = { x: 0, y: 0 };
+                                this.state = BIRD_STATES.HOPPING;
+                                this.stateTimer = 0;
+                                this.hopData = null;
+                                debugLog(`Bird transitioning from IDLE to HOPPING on ground`);
+                                break;
+                            }
+
                             // CHECK FOR BATHING FIRST:
                             if (puddles.length > 0 && Math.random() < 0.4) { // 40% chance to bathe if puddles exist
                                 this.findPuddle();
                             }
-                                
+
                             // V26: Adjusted state preferences for more perching
                             if (this.hunger > HUNGER_CRITICAL_THRESHOLD - 50) {
                                 // Go find food if somewhat hungry
@@ -6860,6 +6872,18 @@ if ((isRaining || timeOfDay >= 1) && Math.random() < 0.4) { // 40% chance to see
                             } else if (!this.isWild && !this.myNest && twigs.length > 0 && r < 0.4) { // Increased from ~0.2
                                 // Much higher chance to collect nest materials
                                 this.findTwigs();
+                            } else if (r < BIRD_STATE_PREFERENCES.HOPPING) { // NEW: Check for hopping preference
+                                // Prefer hopping on ground for foraging
+                                const targetX = Math.random() * canvas.width;
+                                this.path = [
+                                    { x: this.x, y: this.y },
+                                    { x: targetX, y: groundY + 40 }
+                                ];
+                                this.pathIndex = 0;
+                                this.intendToHop = true;
+                                this.state = BIRD_STATES.FLYING;
+                                this.stateTimer = 0;
+                                debugLog(`Bird flying to ground to hop`);
                             } else if (r < BIRD_STATE_PREFERENCES.PERCHING) { // Increased perching preference
                                 // Try to find perch
                                 this.findPerch();
@@ -6868,7 +6892,7 @@ if ((isRaining || timeOfDay >= 1) && Math.random() < 0.4) { // 40% chance to see
                                 this.stateTimer = 0;
                                 // Set random direction to fly in
                                 this.generatePath(
-                                    Math.random() * canvas.width, 
+                                    Math.random() * canvas.width,
                                     100 + Math.random() * (canvas.height * 0.5 - 100)
                                 );
                             }
@@ -7854,7 +7878,7 @@ if ((isRaining || timeOfDay >= 1) && Math.random() < 0.4) { // 40% chance to see
                         const groundY = canvas.height * GROUND_HEIGHT_RATIO;
                         const distanceToGround = Math.abs(this.y - groundY);
 
-                        if (distanceToGround < 80 && Math.random() < 0.002) { // Slightly increased frequency for more ground activity
+                        if (distanceToGround < 120 && Math.random() < 0.015) { // Significantly increased for much more ground activity
                             // Land on ground and rest/hop - prefer landing under trees
                             let landX = this.x + (Math.random() - 0.5) * 50;
 
@@ -8866,7 +8890,14 @@ ctx.stroke();
                 // Update position
                 this.x += this.velocity.x * (deltaTime / 16);
                 this.y += this.velocity.y * (deltaTime / 16);
-                
+
+                // CRITICAL FIX: Clamp rat to ground level or below (prevent floating)
+                const minGroundY = canvas.height * GROUND_HEIGHT_RATIO;
+                if (this.y < minGroundY) {
+                    this.y = minGroundY;
+                    this.velocity.y = 0; // Stop upward movement
+                }
+
                 return false;
             }
             
@@ -9520,12 +9551,21 @@ class Squirrel {
         // Update position
         this.x += this.velocity.x * (deltaTime / 16);
         this.y += this.velocity.y * (deltaTime / 16);
-        
+
+        // CRITICAL FIX: Clamp squirrel to ground level when on ground (prevent floating)
+        // Allow below ground for foraging, but never above ground unless in tree/jumping
+        if (this.state === 'wandering' || this.state === 'foraging' || this.state === 'fleeing' || this.state === 'stunned') {
+            if (this.y < this.groundY) {
+                this.y = this.groundY;
+                this.velocity.y = Math.max(0, this.velocity.y); // Only allow downward movement
+            }
+        }
+
         // Apply position constraints if not intentionally leaving
         if (this.state !== 'leaving') {
             validatePosition(this);
         }
-        
+
         return false;
     }
     
@@ -14792,47 +14832,108 @@ function spawnOwls() {
         }
 
         // Update and draw all elements
-        // Weather Forecast System - ACCURATE for next 3 minutes
+        // Weather Forecast System - ACCURATE minute-by-minute
         function generateWeatherForecast() {
             const currentTime = Date.now();
-            const threeMinutesFromNow = currentTime + (3 * 60 * 1000); // 3 minutes
 
             nextWeatherEvents = [];
 
-            // Check if currently raining
+            // FIRST EMOJI: Current weather state (now)
             if (isRaining) {
                 nextWeatherEvents.push({
                     type: isThundering ? 'thunder' : 'rain',
                     icon: isThundering ? '⛈️' : '🌧️',
-                    time: currentTime
+                    time: currentTime,
+                    label: 'Now'
                 });
-            }
-
-            // Check if rain is scheduled within next 3 minutes
-            if (window.nextScheduledRainTime) {
-                const timeUntilRain = window.nextScheduledRainTime - currentTime;
-
-                if (timeUntilRain > 0 && timeUntilRain <= 180000) { // Within 3 minutes
-                    const willThunder = window.nextRainWillThunder || false;
-                    nextWeatherEvents.push({
-                        type: willThunder ? 'thunder' : 'rain',
-                        icon: willThunder ? '⛈️' : '🌧️',
-                        time: window.nextScheduledRainTime
-                    });
-                }
-            }
-
-            // Fill remaining slots with clear weather if less than 3 events
-            while (nextWeatherEvents.length < 3) {
+            } else {
                 nextWeatherEvents.push({
                     type: 'clear',
                     icon: '☀️',
-                    time: currentTime + (60000 * (nextWeatherEvents.length + 1)) // 1, 2, 3 minutes out
+                    time: currentTime,
+                    label: 'Now'
                 });
             }
 
-            // Only show first 3
-            nextWeatherEvents = nextWeatherEvents.slice(0, 3);
+            // SECOND EMOJI: Weather in next 1 minute (+1 min)
+            const oneMinuteFromNow = currentTime + 60000;
+            if (window.nextScheduledRainTime && window.nextScheduledRainTime <= oneMinuteFromNow) {
+                // Rain will start within next minute
+                const willThunder = window.nextRainWillThunder || false;
+                nextWeatherEvents.push({
+                    type: willThunder ? 'thunder' : 'rain',
+                    icon: willThunder ? '⛈️' : '🌧️',
+                    time: oneMinuteFromNow,
+                    label: '+1 min'
+                });
+            } else if (isRaining) {
+                // Currently raining, check if it will continue
+                if (window.rainStopTime && window.rainStopTime > oneMinuteFromNow) {
+                    // Rain continues
+                    nextWeatherEvents.push({
+                        type: isThundering ? 'thunder' : 'rain',
+                        icon: isThundering ? '⛈️' : '🌧️',
+                        time: oneMinuteFromNow,
+                        label: '+1 min'
+                    });
+                } else {
+                    // Rain might stop
+                    nextWeatherEvents.push({
+                        type: 'clear',
+                        icon: '☀️',
+                        time: oneMinuteFromNow,
+                        label: '+1 min'
+                    });
+                }
+            } else {
+                // Clear weather continues
+                nextWeatherEvents.push({
+                    type: 'clear',
+                    icon: '☀️',
+                    time: oneMinuteFromNow,
+                    label: '+1 min'
+                });
+            }
+
+            // THIRD EMOJI: Weather in following minute (+2 min)
+            const twoMinutesFromNow = currentTime + 120000;
+            if (window.nextScheduledRainTime && window.nextScheduledRainTime <= twoMinutesFromNow) {
+                // Rain will start within next 2 minutes
+                const willThunder = window.nextRainWillThunder || false;
+                nextWeatherEvents.push({
+                    type: willThunder ? 'thunder' : 'rain',
+                    icon: willThunder ? '⛈️' : '🌧️',
+                    time: twoMinutesFromNow,
+                    label: '+2 min'
+                });
+            } else if (isRaining) {
+                // Currently raining, check if it will continue
+                if (window.rainStopTime && window.rainStopTime > twoMinutesFromNow) {
+                    // Rain continues
+                    nextWeatherEvents.push({
+                        type: isThundering ? 'thunder' : 'rain',
+                        icon: isThundering ? '⛈️' : '🌧️',
+                        time: twoMinutesFromNow,
+                        label: '+2 min'
+                    });
+                } else {
+                    // Rain might stop
+                    nextWeatherEvents.push({
+                        type: 'clear',
+                        icon: '☀️',
+                        time: twoMinutesFromNow,
+                        label: '+2 min'
+                    });
+                }
+            } else {
+                // Clear weather continues
+                nextWeatherEvents.push({
+                    type: 'clear',
+                    icon: '☀️',
+                    time: twoMinutesFromNow,
+                    label: '+2 min'
+                });
+            }
         }
 
         // Draw large transparent clock in sky with forecast
